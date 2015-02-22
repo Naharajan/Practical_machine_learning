@@ -1,0 +1,165 @@
+---
+title: "Practical Machine Learning"
+output: html_document
+---
+
+#Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases. 
+
+#Loading the training and test data
+
+The training and the test data were first loaded into R. 
+
+```{r}
+train_data=read.csv("pml-training.csv", h=T, stringsAsFactors=F)
+test_data=read.csv("pml-testing.csv", h=T,stringsAsFactors=F)
+dim(train_data)
+```
+
+The training data had 19622 rows and 160 columns and the test data had 20 rows and 160 columns. 
+
+##Removing columns with NA's and missing values
+
+There are several columns in the dataset with NA's and missing values. We first remove any columns, which has more than 95% NA's in them.
+
+```{r}
+na_factor<-apply(train_data,2,function(col)sum(is.na(col))/length(col))*100
+na_factor=as.data.frame(na_factor)
+na_factor$colname=rownames(na_factor)
+rownames(na_factor)=NULL
+#plot_na=ggplot(subset(na_factor,na_factor>95), aes(colname, na_factor))+geom_bar(stat="identity")+coord_flip()
+#plot_na
+subset_na_95=subset(na_factor, na_factor>95)
+na_thrash <- !names(train_data) %in% subset_na_95$colname
+train_data_trans <- train_data[,na_thrash] 
+```
+
+## missing values
+
+```{r}
+still<-c("kurtosis_roll_belt",  "kurtosis_picth_belt",  "kurtosis_yaw_belt",	"skewness_roll_belt",	"skewness_roll_belt.1",	"skewness_yaw_belt", "max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "kurtosis_roll_arm",	"kurtosis_picth_arm",	"kurtosis_yaw_arm",	"skewness_roll_arm",	"skewness_pitch_arm",	"skewness_yaw_arm", "kurtosis_roll_arm",	"kurtosis_picth_arm",	"kurtosis_yaw_arm",	"skewness_roll_arm",	"skewness_pitch_arm",	"skewness_yaw_arm", "kurtosis_roll_dumbbell",	"kurtosis_picth_dumbbell",	"kurtosis_yaw_dumbbell",	"skewness_roll_dumbbell",	"skewness_pitch_dumbbell",	"skewness_yaw_dumbbell" , "max_yaw_dumbbell" ,"min_yaw_dumbbell" ,"amplitude_yaw_dumbbell", "max_yaw_forearm", "max_yaw_forearm", "min_yaw_forearm","kurtosis_picth_forearm", "skewness_yaw_forearm","amplitude_yaw_forearm","kurtosis_picth_forearm","kurtosis_yaw_forearm","skewness_roll_forearm","kurtosis_roll_forearm","skewness_pitch_forearm")
+still_thrash <- !names(train_data_trans) %in% still
+train_data_trans_1 <- train_data_trans[,still_thrash] 
+train_data_trans_1<- train_data_trans_1[,-c(1:7)]
+train_data_trans_1$classe=as.factor(train_data$classe)
+```
+
+## Spliting the training data
+
+We will first split the training data into training and validation dataset. The models built using the training dataset will be validated using the validation dataset.
+
+
+```{r}
+set.seed(77777)
+library(caret)
+
+training <- createDataPartition(y=train_data_trans_1$classe,
+                               p=0.75,list=FALSE)
+training_data <- train_data_trans_1[training,]
+validation_data <- train_data_trans_1[-training,]
+```
+
+
+
+
+#Data Preprocessing 
+
+We first look for correlation between the predictors using the cor function and plot the correlation coefficients using the heatmap function. 
+
+
+```{r}
+m <- abs(cor(training_data[,-53]))
+diag(m) <-0
+which(m>0.8, arr.ind=T)
+plot(training_data[,21], training_data[,24])
+heatmap(m)
+```
+
+We see that 38 of the variables have a high correlation coefficient greater than 0.8. We use principal component analysis (PCA) to preprocess the data. The variance threshold was set to 0.95 meaning we retain all the PC's that explain 95% of the variance in the training data.
+
+
+```{r}
+preProc<- preProcess (training_data[,-53], method="pca", thresh=0.95)
+training_data_preprocess<- predict (preProc, training_data[,-53])
+training_data_preprocess$classe=training_data$classe
+
+validation_data_preprocess <- predict (preProc, validation_data[,-53])
+validation_data_preprocess$classe=validation_data$classe
+
+```
+
+# Model Building using Random forest
+
+The popular machine learnign method namely random forest was first selected to fit the training data. Since transformation of the data doesn't make a big difference with tree methods, we try to fit a randomforest model to the original unprocessed training data. To see if the preprocessing had an effect, we also fit a randomforest model to the preprocessed data and compare them.
+
+## The out-of-bag (oob) error estimate
+In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error. It is estimated internally, during the run, as follows:
+
+Each tree is constructed using a different bootstrap sample from the original data. About one-third of the cases are left out of the bootstrap sample and not used in the construction of the kth tree.
+
+Put each case left out in the construction of the kth tree down the kth tree to get a classification. In this way, a test set classification is obtained for each case in about one-third of the trees. At the end of the run, take j to be the class that got most of the votes every time case n was oob. The proportion of times that j is not equal to the true class of n averaged over all cases is the oob error estimate. This has proven to be unbiased in many tests.
+
+### randomForest model without preprocessing
+
+```{r}
+library(randomForest)
+fit<-randomForest(classe~., data=training_data)
+print(fit)
+confusionMatrix(table(predict(fit, training_data), training_data$classe))
+
+#validation_data_preprocess<- predict(preProc, validation_data)
+confusionMatrix(table(predict(fit, validation_data), validation_data$classe))
+```
+
+The training accuracy from the above model is 100% and the OOB estimate of the error rate is 0.4%, which is excellent and the validation accuracy is 99.5%.
+
+### randomForest model with pca preprocessing
+
+```{r}
+fit_preprocess<-randomForest(classe~., data=training_data_preprocess)
+print(fit_preprocess)
+confusionMatrix(table(predict(fit_preprocess, training_data_preprocess), training_data_preprocess$classe))
+confusionMatrix(table(predict(fit_preprocess, validation_data_preprocess), validation_data_preprocess$classe))
+```
+
+The training accuracy from the above model is 100% and the OOB estimate of the error rate is 2.3%, which is excellent and the validation accuracy is 97%.
+
+# Model Selection and test set prediction
+
+Since the validation accuracy was higher in the random forest model with the original non-preprocessed training data, we chose that to be the final model.
+The model was then used to predict the classes of the test dataset.
+
+```{r}
+test_data=read.csv("pml-testing.csv", h=T,stringsAsFactors=F)
+train_lables<- colnames(test_data) %in% colnames(training_data)
+test_data_filtered<- test_data[train_lables]
+setdiff(names(training_data), names(test_data_filtered))
+pred_test<-predict(fit, test_data_filtered)
+pred_test
+```
+
+# Writing the results
+
+The pml_write_files function from the course site was used to write the results of the test dataset and they were then submitted to the course site for evaluation.
+
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+answers<-as.character(pred_test)
+pml_write_files(answers)
+```
+
+#References
+
+ 1. http://groupware.les.inf.puc-rio.br/har
+ 
+ 2. https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm
